@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Nutri Pal · Photo Subagent Design</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js"></script>
+<style>
+  :root{
+    --bg:#f7f8fa; --card:#ffffff; --ink:#1c2333; --muted:#5b6472;
+    --line:#e4e8ee; --accent:#2f6df6; --crit:#e5484d; --gate:#f5a524;
+    --good:#12a594; --prompt:#8b5cf6;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#0f1218; --card:#161b24; --ink:#e8ecf3; --muted:#98a2b3;
+      --line:#252c38; --accent:#5b8cff; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  .wrap{max-width:1080px;margin:0 auto;padding:32px 24px 64px;}
+  header h1{margin:0 0 4px;font-size:24px;letter-spacing:-.01em;}
+  header p{margin:0;color:var(--muted);}
+  .tag{display:inline-block;font-size:12px;font-weight:600;color:var(--accent);
+    background:color-mix(in srgb,var(--accent) 12%,transparent);
+    padding:2px 10px;border-radius:999px;margin-bottom:10px;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;
+    padding:20px 22px;margin-top:22px;box-shadow:0 1px 2px rgba(0,0,0,.04);}
+  .card h2{margin:0 0 12px;font-size:15px;text-transform:uppercase;
+    letter-spacing:.06em;color:var(--muted);font-weight:700;}
+  .mermaid{display:flex;justify-content:center;overflow-x:auto;}
+  .legend{display:flex;flex-wrap:wrap;gap:14px;margin-top:6px;}
+  .legend span{display:inline-flex;align-items:center;gap:7px;font-size:13px;color:var(--muted);}
+  .dot{width:12px;height:12px;border-radius:3px;display:inline-block;}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+  @media (max-width:760px){.grid{grid-template-columns:1fr;}}
+  code{background:color-mix(in srgb,var(--muted) 14%,transparent);
+    padding:1px 6px;border-radius:5px;font-size:13px;}
+  pre{margin:0;background:#0d1017;color:#d7deea;border-radius:12px;padding:16px;
+    overflow-x:auto;font-size:12.5px;line-height:1.5;}
+  ul{margin:6px 0 0;padding-left:18px;} li{margin:4px 0;color:var(--muted);}
+  li b{color:var(--ink);font-weight:600;}
+  .note{font-size:13px;color:var(--muted);margin-top:10px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <span class="tag">Nutri Pal · subagent design</span>
+    <h1>Photo → Macro Estimation Subagent</h1>
+    <p>Input: one or more meal photos. Output: a structured report of ingredients, portions,
+       macros, and confidence — plus user clarification prompts when confidence is low.</p>
+  </header>
+
+  <div class="card">
+    <h2>Pipeline</h2>
+    <div class="mermaid">
+flowchart TD
+    A[/"INPUT&nbsp;·&nbsp;1+ meal photos<br/>optional: depth map · EXIF · reference object in frame"/]:::input --> B
+
+    B["Stage 1 · Ingest &amp; Preprocess<br/><small>normalize images · read EXIF/depth<br/>detect reference object · group multi-angle shots</small>"]:::stage --> C
+
+    C["Stage 2 · Detect &amp; Segment (VLM)<br/><small>identify distinct food items · segment each<br/>emits recognition confidence per item</small>"]:::stage --> D
+
+    D["Stage 3 · Portion / Volume Estimation&nbsp;&#9888;<br/><small>DOMINANT ERROR SOURCE — per item: grams + portion confidence<br/>cues: reference-object scale · depth · plate-size &amp; serving priors</small>"]:::crit --> E
+
+    E["Stage 4 · Macro Lookup &amp; Scaling<br/><small>map item → nutrition DB (USDA FDC primary;<br/>Nutritionix / Edamam branded fallback) · scale by grams<br/>macros = priority · fiber/vitamins/minerals = best-effort</small>"]:::stage --> F
+
+    F["Stage 5 · Aggregate &amp; Propagate Uncertainty<br/><small>sum per-item → meal totals<br/>combine confidences (portion-dominated) → confidence band</small>"]:::stage --> G
+
+    G{"Stage 6 · Confidence Gate<br/><small>any item or total conf &lt; threshold?</small>"}:::gate
+    G -->|"no"| I
+    G -->|"yes"| H["Generate targeted prompts<br/><small>&ldquo;about a cup of rice, or closer to two?&rdquo;</small>"]:::prompt
+    H --> I
+
+    I[/"REPORT OUT&nbsp;→ compiler / orchestrator<br/>ingredients[]: item · portion · confidence<br/>totals: macros + confidence band<br/>micros: fiber / vitamins / minerals (nice-to-have)<br/>clarification_prompts[] (if gate tripped)"/]:::output
+
+    H -.->|"user answers (voice / app)"| D
+    E -.->|"offline eval"| BM[["Benchmark harness<br/><small>vs Nutrition5k test set<br/>stage 2–5 accuracy, portion MAE</small>"]]:::bench
+
+    classDef input fill:#eef3ff,stroke:#2f6df6,color:#12203a,stroke-width:1.5px;
+    classDef stage fill:#ffffff,stroke:#c7d0dd,color:#1c2333,stroke-width:1.5px;
+    classDef crit fill:#fdecec,stroke:#e5484d,color:#5c1417,stroke-width:2px;
+    classDef gate fill:#fff5e6,stroke:#f5a524,color:#5a3d0a,stroke-width:2px;
+    classDef prompt fill:#f3eefe,stroke:#8b5cf6,color:#2e1d55,stroke-width:1.5px;
+    classDef output fill:#e9faf6,stroke:#12a594,color:#0a3d36,stroke-width:1.5px;
+    classDef bench fill:#f4f6f9,stroke:#98a2b3,color:#3a424f,stroke-width:1.2px,stroke-dasharray:4 3;
+    </div>
+    <div class="legend">
+      <span><i class="dot" style="background:#2f6df6"></i>input / output</span>
+      <span><i class="dot" style="background:#c7d0dd"></i>pipeline stage</span>
+      <span><i class="dot" style="background:#e5484d"></i>critical error stage</span>
+      <span><i class="dot" style="background:#f5a524"></i>confidence gate</span>
+      <span><i class="dot" style="background:#8b5cf6"></i>user clarification</span>
+      <span><i class="dot" style="background:#12a594"></i>report out</span>
+      <span><i class="dot" style="background:#98a2b3"></i>offline eval (dashed)</span>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Why it's shaped this way</h2>
+      <ul>
+        <li><b>Identification and portion are separated</b> because they fail for different reasons and carry independent confidences. Portion is the one to obsess over.</li>
+        <li><b>Macros come from the DB, not the model.</b> Stage 4 looks up canonical values by (item, grams) so numbers are consistent and auditable — the VLM never free-hands "43g protein."</li>
+        <li><b>Uncertainty flows forward.</b> Total confidence is dominated by portion confidence; a shaky gram estimate should visibly widen the meal's error band.</li>
+        <li><b>The gate feeds your voice loop.</b> Low confidence becomes a spoken question; the answer re-enters at Stage 3 and doubles as labeled data for later fine-tuning.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h2>Confidence &amp; gating</h2>
+      <ul>
+        <li><b>Per-item confidence</b> = f(recognition_conf, portion_conf, db_match_conf), with portion_conf weighted heaviest.</li>
+        <li><b>Gate triggers</b> if any high-impact item (large share of total calories) or the meal total falls below threshold — not just any low number.</li>
+        <li><b>Prompts are targeted:</b> ask only about the item driving the uncertainty, phrased for a one-breath voice answer.</li>
+        <li><b>Report always ships</b> a best estimate even when unprompted — the prompts refine, they don't block.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Report contract (sketch)</h2>
+<pre>{
+  "ingredients": [
+    { "name": "white rice", "portion_g": 210, "portion_desc": "~1.5 cups",
+      "macros": { "kcal": 274, "protein_g": 5.3, "carb_g": 59, "fat_g": 0.6 },
+      "micros": { "fiber_g": 0.9 },
+      "confidence": { "recognition": 0.94, "portion": 0.55, "db_match": 0.9, "overall": 0.6 } }
+  ],
+  "totals": {
+    "macros": { "kcal": 612, "protein_g": 41, "carb_g": 63, "fat_g": 19 },
+    "micros": { "fiber_g": 4.2, "sodium_mg": 780 },     // best-effort
+    "confidence": 0.63,
+    "kcal_range": [520, 705]                             // portion-driven band
+  },
+  "clarification_prompts": [
+    { "item": "white rice", "reason": "portion", "ask": "Was the rice about a cup, or closer to two?" }
+  ],
+  "meta": { "photos": 2, "depth_used": false, "reference_object": null }
+}</pre>
+    <p class="note">Macros are required on every item and on totals; micros are populated when the DB entry has them, omitted otherwise. The compiler agent consumes <code>totals</code> and surfaces <code>clarification_prompts</code> to the orchestrator.</p>
+  </div>
+</div>
+
+<script>
+  mermaid.initialize({ startOnLoad:true, securityLevel:'loose', theme:'base',
+    themeVariables:{ fontFamily:'-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif',
+      fontSize:'13px', lineColor:'#9aa4b2' },
+    flowchart:{ curve:'basis', nodeSpacing:38, rankSpacing:46, htmlLabels:true } });
+</script>
+</body>
+</html>
